@@ -67,7 +67,7 @@ CSS;
 
   var CFG = window.RB_BG_CROP_CFG||{};
   var NAME_REP  = CFG.rep, NAME_DESK = CFG.desk, NAME_MOB = CFG.mob, NAME_CROP = CFG.crop;
-  var ASPECT_W  = CFG.ASPECT_W, ASPECT_H = CFG.ASPECT_H;
+  var ASPECT_W  = CFG.ASPECT_W, ASPECT_H = CFG.ASH;
   var syncing   = false;
 
   function getUploader(field){ return field ? field.querySelector('.acf-image-uploader') : null; }
@@ -158,7 +158,15 @@ CSS;
     bd.style.display='flex';
 
     var can = bd.querySelector('[data-canvas]');
-    can.src = img.getAttribute('src');
+    
+    // ===== FIX 2: USAR IMAGEN COMPLETA, NO THUMBNAIL =====
+    // Tomar la URL del thumbnail y quitarle el sufijo de tamaño (ej. -300x200.jpg)
+    // para obtener la URL de la imagen original.
+    var thumbUrl = img.getAttribute('src');
+    var fullUrl = thumbUrl.replace(/-\d+x\d+(\.(jpe?g|png|gif|webp))$/i, '$1');
+    can.src = fullUrl;
+    // ===================================================
+
     var cropper=null;
 
     function init(){
@@ -174,23 +182,37 @@ CSS;
         rotatable: false,
         ready: function(){
           try {
-            // 1) Mostrar imagen COMPLETA (contain)
             var imageData = cropper.getImageData();
+            var natW = imageData.naturalWidth;
+            var natH = imageData.naturalHeight;
+
+            // 1) Mostrar imagen COMPLETA (contain)
             var container = cropper.getContainerData();
-            var ratio = Math.min(container.width / imageData.naturalWidth, container.height / imageData.naturalHeight);
+            var ratio = Math.min(container.width / natW, container.height / natH);
             if (ratio && isFinite(ratio) && ratio > 0) cropper.zoomTo(ratio);
 
-            // 2) Si hay JSON previo, restaurarlo en coordenadas nativas
+            // ===== FIX 3: LÓGICA DE RESTAURACIÓN CORREGIDA =====
+            // 2) Si hay JSON previo, restaurarlo
             var cropInput = getCropInputFromField(field);
+            var restored = false;
             if (cropInput && cropInput.value){
               try{
                 var d = JSON.parse(cropInput.value);
-                var natW = can.naturalWidth || can.width;
-                var natH = can.naturalHeight|| can.height;
-                var sx = natW / d.Ow, sy = natH / d.Oh;
-                cropper.setData({ x:d.x*sx, y:d.y*sy, width:d.w*sx, height:d.h*sy });
+                // Solo restaurar si las dimensiones (Ow, Oh) guardadas
+                // coinciden con las de la imagen actual (natW, natH)
+                if (d.Ow === natW && d.Oh === natH) {
+                   cropper.setData(d); // d ya tiene x,y,w,h en coords nativas
+                   restored = true;
+                }
               }catch(e){}
             }
+            // Si no se restauró un crop previo (ej. imagen nueva),
+            // usar el área de crop automática.
+            if (!restored) {
+               // Esto activa el autoCropArea: 0.8
+            }
+            // =====================================================
+
           } catch(e){}
         }
       });
@@ -200,13 +222,20 @@ CSS;
     bd.querySelector('[data-close]').onclick = function(){ if(cropper){cropper.destroy();} bd.remove(); };
     bd.querySelector('[data-reset]').onclick = function(){ if(cropper){cropper.reset();} };
     bd.querySelector('[data-apply]').onclick = function(){
-      var natW = can.naturalWidth || can.width;
-      var natH = can.naturalHeight|| can.height;
-      var d = cropper.getData(true);
-      var data = { x:Math.round(d.x), y:Math.round(d.y), w:Math.round(d.width), h:Math.round(d.height), Ow:natW, Oh:natH };
+      // Guardar coordenadas nativas (true)
+      var d = cropper.getData(true); 
+      // Obtener dimensiones nativas de la imagen
+      var imgData = cropper.getImageData();
+      var natW = imgData.naturalWidth;
+      var natH = imgData.naturalHeight;
+
+      var data = { x:d.x, y:d.y, w:d.w, h:d.h, Ow:natW, Oh:natH };
+      
       var cropInput = getCropInputFromField(field);
       if (cropInput) cropInput.value = JSON.stringify(data);
-      paintPreview(preview, img.getAttribute('src'), data);
+      
+      // Usar la URL del thumbnail para el preview (es más liviano)
+      paintPreview(preview, thumbUrl, data);
       cropper.destroy(); bd.remove();
     };
   }
@@ -271,7 +300,19 @@ CSS;
     if (!src || !dst) return;
 
     var id = getFieldId(src);
-    if (!id) return;
+    // Si se limpia el campo (id=''), también sincronizar el borrado
+    if (!id) {
+      // Limpiar el campo destino
+      var up=getUploader(dst);
+      if (up && up.classList.contains('has-value')) {
+        syncing = true;
+        var removeBtn = up.querySelector('.acf-button[data-name="remove"]');
+        if (removeBtn) removeBtn.click();
+        if (dst.getAttribute('data-name') === NAME_MOB) refreshMobileUI(dst);
+        syncing = false;
+      }
+      return;
+    }
 
     var srcImg = getImg(src);
     var url = srcImg ? srcImg.getAttribute('src') : '';
@@ -291,6 +332,10 @@ CSS;
   }
 
   function setupRow(row){
+    // Marcar la fila como inicializada para evitar dobles enlaces
+    if (row.getAttribute('data-rb-setup')) return;
+    row.setAttribute('data-rb-setup', 'true');
+
     var mobField  = findRowFieldByName(row, NAME_MOB);
     var deskField = findRowFieldByName(row, NAME_DESK);
 
@@ -298,22 +343,34 @@ CSS;
 
     // Desktop → Mobile
     if (deskField){
-      var upD = getUploader(deskField);
-      if (upD){
-        var obsD = new MutationObserver(function(){ syncPair(row, NAME_DESK, NAME_MOB); });
-        obsD.observe(upD, { attributes:true, attributeFilter:['class'] });
-      }
+      // Observar el input hidden (método principal)
       bindHiddenInputWatcher(deskField, function(){ syncPair(row, NAME_DESK, NAME_MOB); });
+      // Observar la clase (para 'remove')
+      var upD = getUploader(deskField);
+      if(upD){
+        var obsD = new MutationObserver(function(m){
+          if (m[0].oldValue.includes('has-value') && !upD.classList.contains('has-value')) {
+            syncPair(row, NAME_DESK, NAME_MOB);
+          }
+        });
+        obsD.observe(upD, { attributes:true, attributeFilter:['class'], attributeOldValue:true });
+      }
     }
 
     // Mobile → Desktop
     if (mobField){
-      var upM = getUploader(mobField);
-      if (upM){
-        var obsM = new MutationObserver(function(){ syncPair(row, NAME_MOB, NAME_DESK); });
-        obsM.observe(upM, { attributes:true, attributeFilter:['class'] });
-      }
+      // Observar el input hidden (método principal)
       bindHiddenInputWatcher(mobField, function(){ syncPair(row, NAME_MOB, NAME_DESK); });
+      // Observar la clase (para 'remove' via botón 'Limpiar')
+      var upM = getUploader(mobField);
+       if(upM){
+        var obsM = new MutationObserver(function(m){
+          if (m[0].oldValue.includes('has-value') && !upM.classList.contains('has-value')) {
+            syncPair(row, NAME_MOB, NAME_DESK);
+          }
+        });
+        obsM.observe(upM, { attributes:true, attributeFilter:['class'], attributeOldValue:true });
+      }
     }
   }
 
@@ -323,7 +380,18 @@ CSS;
 
   if (window.acf){
     acf.addAction('ready', bootAll);
-    acf.addAction('append', function(){ bootAll(); });
+    
+    // ===== FIX 1: INICIALIZACIÓN CORRECTA DE NUEVAS FILAS =====
+    acf.addAction('append', function( $el ){
+      // $el es el elemento añadido. Puede ser el campo o la fila.
+      // Nos aseguramos de apuntar a la fila (.acf-row)
+      var $row = $el.is('.acf-row') ? $el : $el.closest('.acf-row');
+      if ($row.length) {
+        setupRow($row[0]);
+      }
+    });
+    // ========================================================
+
   } else {
     document.addEventListener('DOMContentLoaded', bootAll);
   }
@@ -337,6 +405,7 @@ CSS;
       var img = getImg(f);
       if (preview && img && img.getAttribute('src')){
         var data=null; if (cropInput && cropInput.value){ try{ data=JSON.parse(cropInput.value);}catch(e){} }
+        // Usar la URL del thumbnail para el preview
         paintPreview(preview, img.getAttribute('src'), data);
       }
     });

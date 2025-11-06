@@ -2,7 +2,7 @@
 /**
  * Plugin Name: RB BG Crop (no ACF Crop)
  * Description: Cropper.js sobre Imagen (Mobile) en el repeater del Front. Guarda JSON (x,y,w,h,Ow,Oh). Sincroniza Desktop ↔ Mobile duplicando el adjunto seleccionado. Preview 740×1600.
- * Version: 12
+ * Version: 13
  */
 if (!defined('ABSPATH')) exit;
 
@@ -105,9 +105,7 @@ CSS;
     return row.querySelector('.acf-field[data-name="'+NAME_CROP+'"] input, .acf-field[data-name="'+NAME_CROP+'"] textarea');
   }
 
-  // ==========================================================
-  // FIX V12: USAR IMAGEN FULL-RES EN EL PREVIEW (NO THUMBNAIL)
-  // ==========================================================
+  // --- Lógica de Preview (V12 - Correcta) ---
   function paintPreview(preview, imgUrl, data){
     if (!preview) return;
     if (!imgUrl){
@@ -118,7 +116,7 @@ CSS;
     
     preview.classList.add('visible');
 
-    // === FIX: Usar imagen FULL-RES para el preview ===
+    // Usar imagen FULL-RES para el preview
     var fullUrl = imgUrl.replace(/-\d+x\d+(\.(jpe?g|png|gif|webp))$/i, '$1');
 
     // Default: center / cover, CON EL COLOR #111 y FULL-RES URL
@@ -128,33 +126,27 @@ CSS;
     if (data && data.w && data.h && data.Ow && data.Oh && data.w !== 0 && data.h !== 0 && data.Ow !== 0 && data.Oh !== 0){
       try {
         var d = data;
-        
-        // 1. Calcular 'background-size'
         var sizeX = (d.Ow / d.w) * 100;
         var sizeY = (d.Oh / d.h) * 100;
-
-        // 2. Calcular 'background-position' (Fórmula de V7/V8)
         var posX = (d.x / (d.Ow - d.w)) * 100;
         var posY = (d.y / (d.Oh - d.h)) * 100;
         
-        // Corregir valores inválidos
         if (isNaN(posX) || !isFinite(posX)) posX = 0;
         if (isNaN(posY) || !isFinite(posY)) posY = 0;
 
-        // 3. Crear el string de estilo COMPLETO (CON #111 y FULL-RES URL)
-        bgStyle = '#111 url('+fullUrl+') ' + // <-- FIX APLICADO
+        // Crear el string de estilo COMPLETO
+        bgStyle = '#111 url('+fullUrl+') ' +
                   posX.toFixed(5) + '% ' +
                   posY.toFixed(5) + '% / ' +
                   sizeX.toFixed(5) + '% ' +
                   sizeY.toFixed(5) + '% no-repeat';
         
       } catch(e) {
-        // Si falla la matemática, volver al default (CON #111 y FULL-RES URL)
         bgStyle = '#111 url('+fullUrl+') center / cover no-repeat';
       }
     }
     
-    // 4. Aplicar el estilo completo con !important
+    // Aplicar el estilo completo con !important
     preview.style.setProperty('background', bgStyle, 'important');
   }
 
@@ -195,7 +187,6 @@ CSS;
 
     var can = bd.querySelector('[data-canvas]');
     var thumbUrl = img.getAttribute('src');
-    // FIX V2: Usar imagen full-res, no thumbnail
     var fullUrl = thumbUrl.replace(/-\d+x\d+(\.(jpe?g|png|gif|webp))$/i, '$1');
     can.src = fullUrl;
     var cropper=null;
@@ -204,22 +195,17 @@ CSS;
       cropper = new Cropper(can, {
         viewMode: 1, responsive: true, aspectRatio: ASPECT_W / ASPECT_H,
         autoCropArea: 0.8,
-        
-        // FIX V6: Modal con imagen fija, solo el recorte se mueve
         dragMode: 'crop', 
         movable: false,   
         zoomable: false,
         scalable: false,
         rotatable: false,
-        
         ready: function(){
           try {
             var imageData = cropper.getImageData(); var natW = imageData.naturalWidth; var natH = imageData.naturalHeight;
             var container = cropper.getContainerData();
             var ratio = Math.min(container.width / natW, container.height / natH);
             if (ratio && isFinite(ratio) && ratio > 0) cropper.zoomTo(ratio);
-            
-            // FIX V3: Lógica de restauración simple
             var cropInput = getCropInputFromField(field);
             if (cropInput && cropInput.value){
               try{
@@ -235,15 +221,23 @@ CSS;
 
     bd.querySelector('[data-close]').onclick = function(){ if(cropper){cropper.destroy();} bd.remove(); };
     bd.querySelector('[data-reset]').onclick = function(){ if(cropper){cropper.reset();} };
+    
+    // ==========================================================
+    // FIX V13: USAR d.width Y d.height (NO d.w Y d.h)
+    // ==========================================================
     bd.querySelector('[data-apply]').onclick = function(){
       var d = cropper.getData(true); 
       var imgData = cropper.getImageData();
       var natW = imgData.naturalWidth; var natH = imgData.naturalHeight;
-      var data = { x:d.x, y:d.y, w:d.w, h:d.h, Ow:natW, Oh:natH };
+      
+      // === EL BUG ESTABA AQUÍ ===
+      // V12 (Incorrecto): var data = { x:d.x, y:d.y, w:d.w, h:d.h, Ow:natW, Oh:natH };
+      // V13 (Correcto):
+      var data = { x:d.x, y:d.y, w:d.width, h:d.height, Ow:natW, Oh:natH };
+      
       var cropInput = getCropInputFromField(field);
       if (cropInput) cropInput.value = JSON.stringify(data);
       cropper.destroy(); bd.remove();
-      // FIX V4: Llamar a refresh general
       refreshMobileUI(field); 
     };
   }
@@ -297,6 +291,7 @@ CSS;
     }
   }
 
+  // --- Lógica de Sincronización (V6 - Correcta) ---
   function syncPair(row, srcName, dstName){
     if (syncing) return;
     var src = findRowFieldByName(row, srcName);
@@ -337,7 +332,6 @@ CSS;
     syncing = false;
   }
 
-  // --- Lógica de Sincronización (V6 - Correcta) ---
   function setupRow(row){
     if (row.getAttribute('data-rb-setup')) return;
     row.setAttribute('data-rb-setup', 'true');

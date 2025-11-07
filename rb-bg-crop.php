@@ -2,7 +2,7 @@
 /**
  * Plugin Name: RB BG Crop (no ACF Crop)
  * Description: Cropper.js sobre Imagen (Mobile) en el repeater del Front. Guarda JSON (x,y,w,h,Ow,Oh). Sincroniza Desktop ↔ Mobile duplicando el adjunto seleccionado. Preview 740×1600.
- * Version: 16
+ * Version: 17
  */
 if (!defined('ABSPATH')) exit;
 
@@ -76,15 +76,17 @@ CSS;
   function hasValue(field){ var up=getUploader(field); return !!(up && up.classList.contains('has-value')); }
   function getFieldId(field){
     var up=getUploader(field); if(!up) return '';
+    // FIX V17: Usar el selector de input original del V1
     var input=up.querySelector('input[type="hidden"]');
     return input ? input.value : '';
   }
   function setFieldIdAndThumb(field, id, url){
     var up=getUploader(field); if(!up) return;
+    // FIX V17: Usar el selector de input original del V1
     var input=up.querySelector('input[type="hidden"]');
     if (input) {
         input.value = id;
-        // Disparar 'change' para que bindHiddenInputWatcher lo escuche
+        // Disparar 'change'
         var ev = new Event('change', { bubbles: true });
         input.dispatchEvent(ev);
     }
@@ -316,13 +318,13 @@ CSS;
   }
 
   // ==========================================================
-  // FIX V16: RESTAURAR EL bindHiddenInputWatcher
+  // FIX V17: VOLVER A LA LÓGICA V1 DE setupRow
   // ==========================================================
   
-  // 1. Añadir la función (del V1)
+  // 1. Añadir la función 'bindHiddenInputWatcher' (del V1)
   function bindHiddenInputWatcher(field, cb){
     var up=getUploader(field); if(!up) return null;
-    var hid = up.querySelector('input[type="hidden"]');
+    var hid = up.querySelector('input[type="hidden"]'); // Selector V1, más simple
     if (!hid) return;
     // 'change' es el evento que disparamos en setFieldIdAndThumb
     hid.addEventListener('change', cb);
@@ -331,51 +333,45 @@ CSS;
   function setupRow(row){
     if (row.getAttribute('data-rb-setup')) return;
     row.setAttribute('data-rb-setup', 'true');
+    
+    // 2. FIX V17: Forzar la ocultación del campo JSON
+    var jsonField = row.querySelector('.acf-field[data-name="'+NAME_CROP+'"]');
+    if (jsonField) {
+        jsonField.style.display = 'none';
+    }
 
     var mobField  = findRowFieldByName(row, NAME_MOB);
     var deskField = findRowFieldByName(row, NAME_DESK);
 
     if (mobField) ensureUIForMobileField(mobField);
 
-    // 2. Restaurar la lógica de "doble-escucha"
+    // 3. Restaurar la lógica de "doble-escucha" del V1
     
     // Desktop → Mobile
     if (deskField){
-        // A) Escuchar el cambio de ID (para 'add')
         bindHiddenInputWatcher(deskField, function(){ syncPair(row, NAME_DESK, NAME_MOB); });
-        
-        // B) Escuchar el cambio de clase (para 'remove')
         var upD = getUploader(deskField);
         if(upD){
             var obsD = new MutationObserver(function(mutations){
-                var oldValue = mutations[0].oldValue || "";
-                var was = oldValue.includes('has-value');
-                var is = upD.classList.contains('has-value');
-                if (was && !is) { // Si 'has-value' fue removido
+                if (!upD.classList.contains('has-value')) {
                    syncPair(row, NAME_DESK, NAME_MOB);
                 }
             });
-            obsD.observe(upD, { attributes:true, attributeFilter:['class'], attributeOldValue:true });
+            obsD.observe(upD, { attributes:true, attributeFilter:['class']});
         }
     }
 
     // Mobile → Desktop
     if (mobField){
-        // A) Escuchar el cambio de ID (para 'add')
         bindHiddenInputWatcher(mobField, function(){ syncPair(row, NAME_MOB, NAME_DESK); });
-        
-        // B) Escuchar el cambio de clase (para 'remove')
         var upM = getUploader(mobField);
         if(upM){
             var obsM = new MutationObserver(function(mutations){
-                var oldValue = mutations[0].oldValue || "";
-                var was = oldValue.includes('has-value');
-                var is = upM.classList.contains('has-value');
-                if (was && !is) { // Si 'has-value' fue removido
+                if (!upM.classList.contains('has-value')) {
                   syncPair(row, NAME_MOB, NAME_DESK);
                 }
             });
-            obsM.observe(upM, { attributes:true, attributeFilter:['class'], attributeOldValue:true });
+            obsM.observe(upM, { attributes:true, attributeFilter:['class']});
         }
     }
   }
@@ -387,14 +383,14 @@ CSS;
   if (window.acf){
     acf.addAction('ready', bootAll);
     
-    // 3. Mantener el setTimeout de 500ms (V15)
-    acf.addAction('append', function( $el ){
-      var $row = $el.is('.acf-row') ? $el : $el.closest('.acf-row');
-      if ($row.length) {
-        setTimeout(function() {
-          setupRow($row[0]);
-        }, 500); 
-      }
+    // ==========================================================
+    // FIX V17: VOLVER A LA LÓGICA V1 ORIGINAL PARA 'append'
+    // ==========================================================
+    acf.addAction('append', function(){
+      // Esta es la lógica del V1
+      // Vuelve a escanear todas las filas. setupRow() tiene un guard
+      // para skippear las filas viejas, asi que solo correrá en la nueva.
+      bootAll();
     });
     
   } else {

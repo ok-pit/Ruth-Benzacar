@@ -2,7 +2,7 @@
 /**
  * Plugin Name: RB BG Crop (no ACF Crop)
  * Description: Cropper.js sobre Imagen (Mobile) en el repeater del Front. Guarda JSON (x,y,w,h,Ow,Oh). Sincroniza Desktop ↔ Mobile duplicando el adjunto seleccionado. Preview 740×1600.
- * Version: 15
+ * Version: 16
  */
 if (!defined('ABSPATH')) exit;
 

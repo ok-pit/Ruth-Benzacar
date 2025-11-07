@@ -2,7 +2,7 @@
 /**
  * Plugin Name: RB BG Crop (no ACF Crop)
  * Description: Cropper.js sobre Imagen (Mobile) en el repeater del Front. Guarda JSON (x,y,w,h,Ow,Oh). Sincroniza Desktop ↔ Mobile duplicando el adjunto seleccionado. Preview 740×1600.
- * Version: 13
+ * Version: 15
  */
 if (!defined('ABSPATH')) exit;
 
@@ -115,7 +115,7 @@ CSS;
     }
     
     preview.classList.add('visible');
-
+    
     // Usar imagen FULL-RES para el preview
     var fullUrl = imgUrl.replace(/-\d+x\d+(\.(jpe?g|png|gif|webp))$/i, '$1');
 
@@ -169,7 +169,7 @@ CSS;
     }
   }
 
-  // --- Lógica del modal (V6 - Correcta) ---
+  // --- Lógica del modal (V13 - Correcta) ---
   function openCropModal(field, preview){
     var img = getImg(field);
     if (!img || !img.getAttribute('src')){ alert('Seleccioná una imagen primero.'); return; }
@@ -222,17 +222,12 @@ CSS;
     bd.querySelector('[data-close]').onclick = function(){ if(cropper){cropper.destroy();} bd.remove(); };
     bd.querySelector('[data-reset]').onclick = function(){ if(cropper){cropper.reset();} };
     
-    // ==========================================================
-    // FIX V13: USAR d.width Y d.height (NO d.w Y d.h)
-    // ==========================================================
     bd.querySelector('[data-apply]').onclick = function(){
       var d = cropper.getData(true); 
       var imgData = cropper.getImageData();
       var natW = imgData.naturalWidth; var natH = imgData.naturalHeight;
       
-      // === EL BUG ESTABA AQUÍ ===
-      // V12 (Incorrecto): var data = { x:d.x, y:d.y, w:d.w, h:d.h, Ow:natW, Oh:natH };
-      // V13 (Correcto):
+      // FIX V13: Usar d.width y d.height
       var data = { x:d.x, y:d.y, w:d.width, h:d.height, Ow:natW, Oh:natH };
       
       var cropInput = getCropInputFromField(field);
@@ -386,13 +381,20 @@ CSS;
 
   if (window.acf){
     acf.addAction('ready', bootAll);
-    // FIX V2: Lógica de 'append' correcta
+    
+    // ==========================================================
+    // FIX V15: AUMENTAR TIMEOUT A 500ms
+    // ==========================================================
     acf.addAction('append', function( $el ){
       var $row = $el.is('.acf-row') ? $el : $el.closest('.acf-row');
       if ($row.length) {
-        setupRow($row[0]);
+        // Esperar 500ms a que ACF termine de renderizar los sub-campos
+        setTimeout(function() {
+          setupRow($row[0]);
+        }, 500); // <-- Aumentado de 100 a 500
       }
     });
+    
   } else {
     document.addEventListener('DOMContentLoaded', bootAll);
   }

@@ -84,6 +84,7 @@ CSS;
     var input=up.querySelector('input[type="hidden"]');
     if (input) {
         input.value = id;
+        // Disparar 'change' para que bindHiddenInputWatcher lo escuche
         var ev = new Event('change', { bubbles: true });
         input.dispatchEvent(ev);
     }
@@ -118,11 +119,8 @@ CSS;
     
     // Usar imagen FULL-RES para el preview
     var fullUrl = imgUrl.replace(/-\d+x\d+(\.(jpe?g|png|gif|webp))$/i, '$1');
-
-    // Default: center / cover, CON EL COLOR #111 y FULL-RES URL
     var bgStyle = '#111 url('+fullUrl+') center / cover no-repeat';
 
-    // Si hay datos de crop válidos, sobreescribir el estilo
     if (data && data.w && data.h && data.Ow && data.Oh && data.w !== 0 && data.h !== 0 && data.Ow !== 0 && data.Oh !== 0){
       try {
         var d = data;
@@ -130,23 +128,17 @@ CSS;
         var sizeY = (d.Oh / d.h) * 100;
         var posX = (d.x / (d.Ow - d.w)) * 100;
         var posY = (d.y / (d.Oh - d.h)) * 100;
-        
         if (isNaN(posX) || !isFinite(posX)) posX = 0;
         if (isNaN(posY) || !isFinite(posY)) posY = 0;
-
-        // Crear el string de estilo COMPLETO
         bgStyle = '#111 url('+fullUrl+') ' +
                   posX.toFixed(5) + '% ' +
                   posY.toFixed(5) + '% / ' +
                   sizeX.toFixed(5) + '% ' +
                   sizeY.toFixed(5) + '% no-repeat';
-        
       } catch(e) {
         bgStyle = '#111 url('+fullUrl+') center / cover no-repeat';
       }
     }
-    
-    // Aplicar el estilo completo con !important
     preview.style.setProperty('background', bgStyle, 'important');
   }
 
@@ -162,7 +154,7 @@ CSS;
       if (toolbar) toolbar.classList.add('visible');
       var data = null;
       if (cropInput && cropInput.value){ try{ data = JSON.parse(cropInput.value); }catch(e){} }
-      paintPreview(preview, img.getAttribute('src'), data); // Esta función ahora es correcta
+      paintPreview(preview, img.getAttribute('src'), data);
     } else {
       if (toolbar) toolbar.classList.remove('visible');
       paintPreview(preview, null, null);
@@ -226,10 +218,7 @@ CSS;
       var d = cropper.getData(true); 
       var imgData = cropper.getImageData();
       var natW = imgData.naturalWidth; var natH = imgData.naturalHeight;
-      
-      // FIX V13: Usar d.width y d.height
       var data = { x:d.x, y:d.y, w:d.width, h:d.height, Ow:natW, Oh:natH };
-      
       var cropInput = getCropInputFromField(field);
       if (cropInput) cropInput.value = JSON.stringify(data);
       cropper.destroy(); bd.remove();
@@ -280,7 +269,6 @@ CSS;
 
     refreshMobileUI(field);
     if (up){
-      // Observador para refrescar UI (botones/preview)
       var obs = new MutationObserver(function(){ refreshMobileUI(field); });
       obs.observe(up, { attributes:true, attributeFilter:['class'] });
     }
@@ -327,6 +315,19 @@ CSS;
     syncing = false;
   }
 
+  // ==========================================================
+  // FIX V16: RESTAURAR EL bindHiddenInputWatcher
+  // ==========================================================
+  
+  // 1. Añadir la función (del V1)
+  function bindHiddenInputWatcher(field, cb){
+    var up=getUploader(field); if(!up) return null;
+    var hid = up.querySelector('input[type="hidden"]');
+    if (!hid) return;
+    // 'change' es el evento que disparamos en setFieldIdAndThumb
+    hid.addEventListener('change', cb);
+  }
+
   function setupRow(row){
     if (row.getAttribute('data-rb-setup')) return;
     row.setAttribute('data-rb-setup', 'true');
@@ -336,18 +337,21 @@ CSS;
 
     if (mobField) ensureUIForMobileField(mobField);
 
-    // Observador universal (Desktop -> Mobile)
+    // 2. Restaurar la lógica de "doble-escucha"
+    
+    // Desktop → Mobile
     if (deskField){
+        // A) Escuchar el cambio de ID (para 'add')
+        bindHiddenInputWatcher(deskField, function(){ syncPair(row, NAME_DESK, NAME_MOB); });
+        
+        // B) Escuchar el cambio de clase (para 'remove')
         var upD = getUploader(deskField);
         if(upD){
             var obsD = new MutationObserver(function(mutations){
-                var el = mutations[0].target;
                 var oldValue = mutations[0].oldValue || "";
-                var newValue = el.className;
                 var was = oldValue.includes('has-value');
-                var is = newValue.includes('has-value');
-
-                if (was !== is) { // Si cambió el estado 'has-value'
+                var is = upD.classList.contains('has-value');
+                if (was && !is) { // Si 'has-value' fue removido
                    syncPair(row, NAME_DESK, NAME_MOB);
                 }
             });
@@ -355,18 +359,19 @@ CSS;
         }
     }
 
-    // Observador universal (Mobile -> Desktop)
+    // Mobile → Desktop
     if (mobField){
+        // A) Escuchar el cambio de ID (para 'add')
+        bindHiddenInputWatcher(mobField, function(){ syncPair(row, NAME_MOB, NAME_DESK); });
+        
+        // B) Escuchar el cambio de clase (para 'remove')
         var upM = getUploader(mobField);
         if(upM){
             var obsM = new MutationObserver(function(mutations){
-                var el = mutations[0].target;
                 var oldValue = mutations[0].oldValue || "";
-                var newValue = el.className;
                 var was = oldValue.includes('has-value');
-                var is = newValue.includes('has-value');
-                
-                if (was !== is) { // Si cambió el estado 'has-value'
+                var is = upM.classList.contains('has-value');
+                if (was && !is) { // Si 'has-value' fue removido
                   syncPair(row, NAME_MOB, NAME_DESK);
                 }
             });
@@ -382,16 +387,13 @@ CSS;
   if (window.acf){
     acf.addAction('ready', bootAll);
     
-    // ==========================================================
-    // FIX V15: AUMENTAR TIMEOUT A 500ms
-    // ==========================================================
+    // 3. Mantener el setTimeout de 500ms (V15)
     acf.addAction('append', function( $el ){
       var $row = $el.is('.acf-row') ? $el : $el.closest('.acf-row');
       if ($row.length) {
-        // Esperar 500ms a que ACF termine de renderizar los sub-campos
         setTimeout(function() {
           setupRow($row[0]);
-        }, 500); // <-- Aumentado de 100 a 500
+        }, 500); 
       }
     });
     

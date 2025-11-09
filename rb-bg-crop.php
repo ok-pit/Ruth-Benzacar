@@ -2,7 +2,7 @@
 /**
  * Plugin Name: RB BG Crop (no ACF Crop)
  * Description: Cropper.js sobre Imagen (Mobile) en el repeater del Front. Guarda JSON (x,y,w,h,Ow,Oh). Sincroniza Desktop ↔ Mobile duplicando el adjunto seleccionado. Preview 740×1600.
- * Version: 21
+ * Version: 24
  */
 if (!defined('ABSPATH')) exit;
 
@@ -142,86 +142,13 @@ CSS;
     preview.style.setProperty('background', bgStyle, 'important');
   }
 
-  // --- Lógica de UI (V13 - Correcta) ---
-  function refreshMobileUI(field){
-    var up=getUploader(field);
-    var wrap=field.querySelector('[data-rb-wrap]') || field.parentNode.querySelector('[data-rb-wrap]');
-    var toolbar = wrap ? wrap.querySelector('.rb-toolbar') : null;
-    var preview = wrap ? wrap.querySelector('.rb-preview') : null;
-    var cropInput = getCropInputFromField(field);
-    var img = getImg(field);
-    if (hasValue(field) && img && img.getAttribute('src')){
-      if (toolbar) toolbar.classList.add('visible');
-      var data = null;
-      if (cropInput && cropInput.value){ try{ data = JSON.parse(cropInput.value); }catch(e){} }
-      paintPreview(preview, img.getAttribute('src'), data);
-    } else {
-      if (toolbar) toolbar.classList.remove('visible');
-      paintPreview(preview, null, null);
-    }
-  }
-
-  // --- Lógica del modal (V13 - Correcta) ---
-  function openCropModal(field, preview){
-    var img = getImg(field);
-    if (!img || !img.getAttribute('src')){ alert('Seleccioná una imagen primero.'); return; }
-    var bd = document.createElement('div');
-    bd.className='rb-backdrop';
-    bd.innerHTML =
-      '<div class="rb-modal">'+
-        '<header><strong>Elegir encuadre ('+ASPECT_W+'×'+ASPECT_H+')</strong><button type="button" class="rb-btn" data-close>✕</button></header>'+
-        '<div class="canvas"><img data-canvas></div>'+
-        '<footer><button type="button" class="rb-btn" data-reset>Reiniciar</button><button type="button" class="rb-btn primary" data-apply>Usar encuadre</button></footer>'+
-      '</div>';
-    document.body.appendChild(bd);
-    bd.style.display='flex';
-    var can = bd.querySelector('[data-canvas]');
-    var thumbUrl = img.getAttribute('src');
-    var fullUrl = thumbUrl.replace(/-\d+x\d+(\.(jpe?g|png|gif|webp))$/i, '$1');
-    can.src = fullUrl;
-    var cropper=null;
-    function init(){
-      cropper = new Cropper(can, {
-        viewMode: 1, responsive: true, aspectRatio: ASPECT_W / ASPECT_H,
-        autoCropArea: 0.8,
-        dragMode: 'crop', 
-        movable: false, zoomable: false, scalable: false, rotatable: false,
-        ready: function(){
-          try {
-            var imageData = cropper.getImageData(); var natW = imageData.naturalWidth; var natH = imageData.naturalHeight;
-            var container = cropper.getContainerData();
-            var ratio = Math.min(container.width / natW, container.height / natH);
-            if (ratio && isFinite(ratio) && ratio > 0) cropper.zoomTo(ratio);
-            var cropInput = getCropInputFromField(field);
-            if (cropInput && cropInput.value){
-              try{
-                var d = JSON.parse(cropInput.value);
-                if (d.Ow === natW && d.Oh === natH) { cropper.setData(d); }
-              }catch(e){}
-            }
-          } catch(e){}
-        }
-      });
-    }
-    if (can.complete) init(); else can.addEventListener('load', init, {once:true});
-    bd.querySelector('[data-close]').onclick = function(){ if(cropper){cropper.destroy();} bd.remove(); };
-    bd.querySelector('[data-reset]').onclick = function(){ if(cropper){cropper.reset();} };
-    bd.querySelector('[data-apply]').onclick = function(){
-      var d = cropper.getData(true); 
-      var imgData = cropper.getImageData();
-      var natW = imgData.naturalWidth; var natH = imgData.naturalHeight;
-      var data = { x:d.x, y:d.y, w:d.width, h:d.height, Ow:natW, Oh:natH };
-      var cropInput = getCropInputFromField(field);
-      if (cropInput) cropInput.value = JSON.stringify(data);
-      cropper.destroy(); bd.remove();
-      refreshMobileUI(field); 
-    };
-  }
-
-  // --- Lógica de UI (V13 - Correcta) ---
+  // --- Lógica de UI (V13 - Correcta, PERO CON OBS V1) ---
   function ensureUIForMobileField(field){
     if (field.getAttribute('data-name') !== NAME_MOB) return;
-    if (field.querySelector('[data-rb-wrap]')) return; // Ya inicializado
+    if (field.querySelector('[data-rb-wrap]')) {
+        refreshMobileUI(field); // V23: Si ya existe, solo refresca
+        return;
+    }
     var up = getUploader(field);
     var wrap = document.createElement('div');
     wrap.className='rb-wrap'; wrap.setAttribute('data-rb-wrap','');
@@ -256,7 +183,10 @@ CSS;
       var removeBtn = currentUp ? currentUp.querySelector('.acf-button[data-name="remove"]') : null;
       if (removeBtn) removeBtn.click();
     });
+    
     refreshMobileUI(field);
+    
+    // Este es el Observer para el *preview*
     if (up){
       var obs = new MutationObserver(function(){ refreshMobileUI(field); });
       obs.observe(up, { attributes:true, attributeFilter:['class'] });
@@ -310,23 +240,24 @@ CSS;
   function bindHiddenInputWatcher(field, cb){
     var hid = hiddenIdInput(field);
     if (!hid) return;
-    // Esta es la V1 original
+    // V1
     ['input','change'].forEach(function(ev){ hid.addEventListener(ev, cb); });
   }
 
   // ==========================================================
-  // FIX V21: ELIMINAR LA "TRABA" (data-rb-setup)
+  // FIX V24: RESTAURAR EL setupRow COMPLETO (DE V1)
   // ==========================================================
   function setupRow(row){
-    // if (row.getAttribute('data-rb-setup')) return; // <-- BUG REMOVIDO
-    // row.setAttribute('data-rb-setup', 'true'); // <-- BUG REMOVIDO
+    // V24: Guard para prevenir re-bindeos exponenciales
+    if (row.getAttribute('data-rb-setup-v24')) return;
+    row.setAttribute('data-rb-setup-v24', 'true');
     
     var mobField  = findRowFieldByName(row, NAME_MOB);
     var deskField = findRowFieldByName(row, NAME_DESK);
 
     if (mobField) ensureUIForMobileField(mobField);
 
-    // Desktop → Mobile
+    // Desktop → Mobile (Lógica V1)
     if (deskField){
       var upD = getUploader(deskField);
       if (upD){
@@ -336,7 +267,7 @@ CSS;
       bindHiddenInputWatcher(deskField, function(){ syncPair(row, NAME_DESK, NAME_MOB); });
     }
 
-    // Mobile → Desktop
+    // Mobile → Desktop (Lógica V1)
     if (mobField){
       var upM = getUploader(mobField);
       if (upM){
@@ -347,22 +278,35 @@ CSS;
     }
   }
 
-  // Lógica V1
   function bootAll(){
     qa('.acf-field-repeater[data-name="'+NAME_REP+'"] .acf-row').forEach(setupRow);
   }
 
-  // Lógica V1
+  // ==========================================================
+  // FIX V24: USAR LA LÓGICA DE BOOT V23 (CON TIMEOUT EN 'append')
+  // ==========================================================
   if (window.acf){
+    // 1. Correr en 'ready' para filas existentes (Lógica V1)
     acf.addAction('ready', bootAll);
-    acf.addAction('append', function(){ bootAll(); });
+    
+    // 2. Correr en 'append' para filas nuevas (Lógica V15)
+    acf.addAction('append', function( $el ){
+      var $row = $el.is('.acf-row') ? $el : $el.closest('.acf-row');
+      if ($row.length) {
+        // Esperar 500ms a que ACF termine de renderizar los sub-campos
+        setTimeout(function() {
+          setupRow($row[0]);
+        }, 500); 
+      }
+    });
+    
   } else {
     document.addEventListener('DOMContentLoaded', bootAll);
   }
 
   // Lógica V13 (Mejorada)
   window.addEventListener('resize', function(){
-    qa('.acf-fiel[data-name="'+NAME_MOB+'"]').forEach(function(f){
+    qa('.acf-field[data-name="'+NAME_MOB+'"]').forEach(function(f){
       refreshMobileUI(f);
     });
   });

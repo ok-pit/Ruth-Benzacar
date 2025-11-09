@@ -2,7 +2,7 @@
 /**
  * Plugin Name: RB BG Crop (no ACF Crop)
  * Description: Cropper.js sobre Imagen (Mobile) en el repeater del Front. Guarda JSON (x,y,w,h,Ow,Oh). Sincroniza Desktop ↔ Mobile duplicando el adjunto seleccionado. Preview 740×1600.
- * Version: 24
+ * Version: 14
  */
 if (!defined('ABSPATH')) exit;
 
@@ -70,24 +70,21 @@ CSS;
   var ASPECT_W  = CFG.ASPECT_W, ASPECT_H = CFG.ASPECT_H;
   var syncing   = false;
 
-  // ==========================================================
-  // HELPERS V18 (LOS CORRECTOS, USANDO V1)
-  // ==========================================================
+  // --- Helpers (V4 - Robustos) ---
   function getUploader(field){ return field ? field.querySelector('.acf-image-uploader') : null; }
   function getImg(field){ var up=getUploader(field); return up? up.querySelector('img'): null; }
   function hasValue(field){ var up=getUploader(field); return !!(up && up.classList.contains('has-value')); }
-  
   function getFieldId(field){
     var up=getUploader(field); if(!up) return '';
-    var input=up.querySelector('input[type="hidden"][name$="[id]"]'); // V1 Selector
+    var input=up.querySelector('input[type="hidden"]');
     return input ? input.value : '';
   }
   function setFieldIdAndThumb(field, id, url){
     var up=getUploader(field); if(!up) return;
-    var input=up.querySelector('input[type="hidden"][name$="[id]"]'); // V1 Selector
+    var input=up.querySelector('input[type="hidden"]');
     if (input) {
         input.value = id;
-        var ev = new Event('change', { bubbles: true }); // Disparamos 'change'
+        var ev = new Event('change', { bubbles: true });
         input.dispatchEvent(ev);
     }
     up.classList.add('has-value');
@@ -96,10 +93,6 @@ CSS;
     var img=wrap.querySelector('img');
     if(!img){ img=document.createElement('img'); wrap.appendChild(img); }
     img.src = url;
-  }
-  function hiddenIdInput(field){
-    var up=getUploader(field); if(!up) return null;
-    return up.querySelector('input[type="hidden"][name$="[id]"]'); // V1 Selector
   }
   function findRowFieldByName(row, name){
     var el = row.querySelector('.acf-field[data-name="'+name+'"]');
@@ -112,17 +105,24 @@ CSS;
     return row.querySelector('.acf-field[data-name="'+NAME_CROP+'"] input, .acf-field[data-name="'+NAME_CROP+'"] textarea');
   }
 
-  // --- Lógica de Preview (V13 - Correcta) ---
+  // --- Lógica de Preview (V12 - Correcta) ---
   function paintPreview(preview, imgUrl, data){
     if (!preview) return;
     if (!imgUrl){
       preview.classList.remove('visible');
-      preview.style.setProperty('background', 'none', 'important');
+      preview.style.setProperty('background', 'none', 'important'); // Limpiar
       return;
     }
+    
     preview.classList.add('visible');
+    
+    // Usar imagen FULL-RES para el preview
     var fullUrl = imgUrl.replace(/-\d+x\d+(\.(jpe?g|png|gif|webp))$/i, '$1');
+
+    // Default: center / cover, CON EL COLOR #111 y FULL-RES URL
     var bgStyle = '#111 url('+fullUrl+') center / cover no-repeat';
+
+    // Si hay datos de crop válidos, sobreescribir el estilo
     if (data && data.w && data.h && data.Ow && data.Oh && data.w !== 0 && data.h !== 0 && data.Ow !== 0 && data.Oh !== 0){
       try {
         var d = data;
@@ -130,25 +130,117 @@ CSS;
         var sizeY = (d.Oh / d.h) * 100;
         var posX = (d.x / (d.Ow - d.w)) * 100;
         var posY = (d.y / (d.Oh - d.h)) * 100;
+        
         if (isNaN(posX) || !isFinite(posX)) posX = 0;
         if (isNaN(posY) || !isFinite(posY)) posY = 0;
+
+        // Crear el string de estilo COMPLETO
         bgStyle = '#111 url('+fullUrl+') ' +
                   posX.toFixed(5) + '% ' +
                   posY.toFixed(5) + '% / ' +
                   sizeX.toFixed(5) + '% ' +
                   sizeY.toFixed(5) + '% no-repeat';
-      } catch(e) { /* default ya está seteado */ }
+        
+      } catch(e) {
+        bgStyle = '#111 url('+fullUrl+') center / cover no-repeat';
+      }
     }
+    
+    // Aplicar el estilo completo con !important
     preview.style.setProperty('background', bgStyle, 'important');
   }
 
-  // --- Lógica de UI (V13 - Correcta, PERO CON OBS V1) ---
+  function refreshMobileUI(field){
+    var up=getUploader(field);
+    var wrap=field.querySelector('[data-rb-wrap]') || field.parentNode.querySelector('[data-rb-wrap]');
+    var toolbar = wrap ? wrap.querySelector('.rb-toolbar') : null;
+    var preview = wrap ? wrap.querySelector('.rb-preview') : null;
+    var cropInput = getCropInputFromField(field);
+    var img = getImg(field);
+
+    if (hasValue(field) && img && img.getAttribute('src')){
+      if (toolbar) toolbar.classList.add('visible');
+      var data = null;
+      if (cropInput && cropInput.value){ try{ data = JSON.parse(cropInput.value); }catch(e){} }
+      paintPreview(preview, img.getAttribute('src'), data); // Esta función ahora es correcta
+    } else {
+      if (toolbar) toolbar.classList.remove('visible');
+      paintPreview(preview, null, null);
+    }
+  }
+
+  // --- Lógica del modal (V13 - Correcta) ---
+  function openCropModal(field, preview){
+    var img = getImg(field);
+    if (!img || !img.getAttribute('src')){ alert('Seleccioná una imagen primero.'); return; }
+
+    var bd = document.createElement('div');
+    bd.className='rb-backdrop';
+    bd.innerHTML =
+      '<div class="rb-modal">'+
+        '<header><strong>Elegir encuadre ('+ASPECT_W+'×'+ASPECT_H+')</strong><button type="button" class="rb-btn" data-close>✕</button></header>'+
+        '<div class="canvas"><img data-canvas></div>'+
+        '<footer><button type="button" class="rb-btn" data-reset>Reiniciar</button><button type="button" class="rb-btn primary" data-apply>Usar encuadre</button></footer>'+
+      '</div>';
+    document.body.appendChild(bd);
+    bd.style.display='flex';
+
+    var can = bd.querySelector('[data-canvas]');
+    var thumbUrl = img.getAttribute('src');
+    var fullUrl = thumbUrl.replace(/-\d+x\d+(\.(jpe?g|png|gif|webp))$/i, '$1');
+    can.src = fullUrl;
+    var cropper=null;
+
+    function init(){
+      cropper = new Cropper(can, {
+        viewMode: 1, responsive: true, aspectRatio: ASPECT_W / ASPECT_H,
+        autoCropArea: 0.8,
+        dragMode: 'crop', 
+        movable: false,   
+        zoomable: false,
+        scalable: false,
+        rotatable: false,
+        ready: function(){
+          try {
+            var imageData = cropper.getImageData(); var natW = imageData.naturalWidth; var natH = imageData.naturalHeight;
+            var container = cropper.getContainerData();
+            var ratio = Math.min(container.width / natW, container.height / natH);
+            if (ratio && isFinite(ratio) && ratio > 0) cropper.zoomTo(ratio);
+            var cropInput = getCropInputFromField(field);
+            if (cropInput && cropInput.value){
+              try{
+                var d = JSON.parse(cropInput.value);
+                if (d.Ow === natW && d.Oh === natH) { cropper.setData(d); }
+              }catch(e){}
+            }
+          } catch(e){}
+        }
+      });
+    }
+    if (can.complete) init(); else can.addEventListener('load', init, {once:true});
+
+    bd.querySelector('[data-close]').onclick = function(){ if(cropper){cropper.destroy();} bd.remove(); };
+    bd.querySelector('[data-reset]').onclick = function(){ if(cropper){cropper.reset();} };
+    
+    bd.querySelector('[data-apply]').onclick = function(){
+      var d = cropper.getData(true); 
+      var imgData = cropper.getImageData();
+      var natW = imgData.naturalWidth; var natH = imgData.naturalHeight;
+      
+      // FIX V13: Usar d.width y d.height
+      var data = { x:d.x, y:d.y, w:d.width, h:d.height, Ow:natW, Oh:natH };
+      
+      var cropInput = getCropInputFromField(field);
+      if (cropInput) cropInput.value = JSON.stringify(data);
+      cropper.destroy(); bd.remove();
+      refreshMobileUI(field); 
+    };
+  }
+
   function ensureUIForMobileField(field){
     if (field.getAttribute('data-name') !== NAME_MOB) return;
-    if (field.querySelector('[data-rb-wrap]')) {
-        refreshMobileUI(field); // V23: Si ya existe, solo refresca
-        return;
-    }
+    if (field.querySelector('[data-rb-wrap]')) return;
+
     var up = getUploader(field);
     var wrap = document.createElement('div');
     wrap.className='rb-wrap'; wrap.setAttribute('data-rb-wrap','');
@@ -160,9 +252,11 @@ CSS;
       '<button type="button" class="rb-btn" data-clear>Limpiar</button>';
     var preview = document.createElement('div');
     preview.className='rb-preview';
+
     if (up) up.insertAdjacentElement('afterend', wrap); else field.appendChild(wrap);
     wrap.appendChild(toolbar);
     wrap.appendChild(preview);
+
     toolbar.querySelector('[data-open]').addEventListener('click', function(){
       var currentPreview = wrap.querySelector('.rb-preview');
       openCropModal(field, currentPreview); 
@@ -183,17 +277,16 @@ CSS;
       var removeBtn = currentUp ? currentUp.querySelector('.acf-button[data-name="remove"]') : null;
       if (removeBtn) removeBtn.click();
     });
-    
+
     refreshMobileUI(field);
-    
-    // Este es el Observer para el *preview*
     if (up){
+      // Observador para refrescar UI (botones/preview)
       var obs = new MutationObserver(function(){ refreshMobileUI(field); });
       obs.observe(up, { attributes:true, attributeFilter:['class'] });
     }
   }
 
-  // --- Lógica de Sync (V19 - Correcta) ---
+  // --- Lógica de Sincronización (V6 - Correcta) ---
   function syncPair(row, srcName, dstName){
     if (syncing) return;
     var src = findRowFieldByName(row, srcName);
@@ -203,8 +296,7 @@ CSS;
     var id = getFieldId(src);
     var dstId = getFieldId(dst);
     
-    // Lógica de BORRADO
-    if (!id) {
+    if (!id) { // Sincronizar BORRADO
       if (dstId) { 
         syncing = true;
         var up=getUploader(dst);
@@ -221,7 +313,7 @@ CSS;
     
     if (id === dstId) return; // Ya están sincronizados
 
-    // Lógica de AÑADIDO
+    // Sincronizar AÑADIDO/CAMBIO
     var srcImg = getImg(src);
     var url = srcImg ? srcImg.getAttribute('src') : '';
     if (!url) return;
@@ -231,50 +323,55 @@ CSS;
     if (dst.getAttribute('data-name') === NAME_MOB) {
         var cropInput = getCropInputFromField(dst);
         if (cropInput) cropInput.value=''; // Limpiar crop anterior
-        refreshMobileUI(dst);
     }
     syncing = false;
   }
 
-  // --- Lógica de Bindeo V20 (Correcta) ---
-  function bindHiddenInputWatcher(field, cb){
-    var hid = hiddenIdInput(field);
-    if (!hid) return;
-    // V1
-    ['input','change'].forEach(function(ev){ hid.addEventListener(ev, cb); });
-  }
-
-  // ==========================================================
-  // FIX V24: RESTAURAR EL setupRow COMPLETO (DE V1)
-  // ==========================================================
   function setupRow(row){
-    // V24: Guard para prevenir re-bindeos exponenciales
-    if (row.getAttribute('data-rb-setup-v24')) return;
-    row.setAttribute('data-rb-setup-v24', 'true');
-    
+    if (row.getAttribute('data-rb-setup')) return;
+    row.setAttribute('data-rb-setup', 'true');
+
     var mobField  = findRowFieldByName(row, NAME_MOB);
     var deskField = findRowFieldByName(row, NAME_DESK);
 
     if (mobField) ensureUIForMobileField(mobField);
 
-    // Desktop → Mobile (Lógica V1)
+    // Observador universal (Desktop -> Mobile)
     if (deskField){
-      var upD = getUploader(deskField);
-      if (upD){
-        var obsD = new MutationObserver(function(){ syncPair(row, NAME_DESK, NAME_MOB); });
-        obsD.observe(upD, { attributes:true, attributeFilter:['class'] });
-      }
-      bindHiddenInputWatcher(deskField, function(){ syncPair(row, NAME_DESK, NAME_MOB); });
+        var upD = getUploader(deskField);
+        if(upD){
+            var obsD = new MutationObserver(function(mutations){
+                var el = mutations[0].target;
+                var oldValue = mutations[0].oldValue || "";
+                var newValue = el.className;
+                var was = oldValue.includes('has-value');
+                var is = newValue.includes('has-value');
+
+                if (was !== is) { // Si cambió el estado 'has-value'
+                   syncPair(row, NAME_DESK, NAME_MOB);
+                }
+            });
+            obsD.observe(upD, { attributes:true, attributeFilter:['class'], attributeOldValue:true });
+        }
     }
 
-    // Mobile → Desktop (Lógica V1)
+    // Observador universal (Mobile -> Desktop)
     if (mobField){
-      var upM = getUploader(mobField);
-      if (upM){
-        var obsM = new MutationObserver(function(){ syncPair(row, NAME_MOB, NAME_DESK); });
-        obsM.observe(upM, { attributes:true, attributeFilter:['class'] });
-      }
-      bindHiddenInputWatcher(mobField, function(){ syncPair(row, NAME_MOB, NAME_DESK); });
+        var upM = getUploader(mobField);
+        if(upM){
+            var obsM = new MutationObserver(function(mutations){
+                var el = mutations[0].target;
+                var oldValue = mutations[0].oldValue || "";
+                var newValue = el.className;
+                var was = oldValue.includes('has-value');
+                var is = newValue.includes('has-value');
+                
+                if (was !== is) { // Si cambió el estado 'has-value'
+                  syncPair(row, NAME_MOB, NAME_DESK);
+                }
+            });
+            obsM.observe(upM, { attributes:true, attributeFilter:['class'], attributeOldValue:true });
+        }
     }
   }
 
@@ -282,21 +379,19 @@ CSS;
     qa('.acf-field-repeater[data-name="'+NAME_REP+'"] .acf-row').forEach(setupRow);
   }
 
-  // ==========================================================
-  // FIX V24: USAR LA LÓGICA DE BOOT V23 (CON TIMEOUT EN 'append')
-  // ==========================================================
   if (window.acf){
-    // 1. Correr en 'ready' para filas existentes (Lógica V1)
     acf.addAction('ready', bootAll);
     
-    // 2. Correr en 'append' para filas nuevas (Lógica V15)
+    // ==========================================================
+    // FIX V14: USAR setTimeout PARA LA 'RACE CONDITION' DE ACF
+    // ==========================================================
     acf.addAction('append', function( $el ){
       var $row = $el.is('.acf-row') ? $el : $el.closest('.acf-row');
       if ($row.length) {
-        // Esperar 500ms a que ACF termine de renderizar los sub-campos
+        // Esperar 100ms a que ACF termine de renderizar los sub-campos
         setTimeout(function() {
           setupRow($row[0]);
-        }, 500); 
+        }, 100);
       }
     });
     
@@ -304,7 +399,7 @@ CSS;
     document.addEventListener('DOMContentLoaded', bootAll);
   }
 
-  // Lógica V13 (Mejorada)
+  // Recalcular preview al resize
   window.addEventListener('resize', function(){
     qa('.acf-field[data-name="'+NAME_MOB+'"]').forEach(function(f){
       refreshMobileUI(f);
